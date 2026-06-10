@@ -166,15 +166,51 @@ let totalPicked = 0;
 
 const keys = {};
 let started = false;
+let tapTarget = null;       // world-space destination set by click / touch
+const tapRipples = [];      // visual feedback rings
+
+function screenToWorld(clientX, clientY) {
+  const cam = cameraPos();
+  return { x: clientX + cam.x, y: clientY + cam.y };
+}
+
+function handlePointerDown(clientX, clientY) {
+  if (!started) started = true;
+  tapTarget = screenToWorld(clientX, clientY);
+  tapRipples.push({ x: tapTarget.x, y: tapTarget.y, age: 0 });
+}
 
 window.addEventListener('keydown', (e) => {
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
   keys[e.key.toLowerCase()] = true;
+  tapTarget = null;
   if (!started) { started = true; }
   if (e.key.toLowerCase() === 'm') toggleAudio();
   if (e.key === ' ' || e.key.toLowerCase() === 'e') tryPick();
 });
 window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+canvas.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  handlePointerDown(e.clientX, e.clientY);
+});
+canvas.addEventListener('mousemove', (e) => {
+  if (!(e.buttons & 1)) return;
+  tapTarget = screenToWorld(e.clientX, e.clientY);
+});
+
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  const t = e.touches[0];
+  handlePointerDown(t.clientX, t.clientY);
+}, { passive: false });
+canvas.addEventListener('touchmove', (e) => {
+  e.preventDefault();
+  const t = e.touches[0];
+  tapTarget = screenToWorld(t.clientX, t.clientY);
+}, { passive: false });
+canvas.addEventListener('touchend', (e) => { e.preventDefault(); }, { passive: false });
 
 // ---------------------------------------------------------------------------
 // Ambient audio (procedural, starts only when toggled on with M)
@@ -279,6 +315,21 @@ function update(dt) {
   if (keys['s'] || keys['arrowdown']) dy += 1;
   if (keys['a'] || keys['arrowleft']) dx -= 1;
   if (keys['d'] || keys['arrowright']) dx += 1;
+
+  // tap-to-move: steer toward touch/click target when no keys held
+  if (dx === 0 && dy === 0 && tapTarget) {
+    const tdx = tapTarget.x - gnome.x;
+    const tdy = tapTarget.y - gnome.y;
+    const td = Math.hypot(tdx, tdy);
+    if (td > 8) {
+      dx = tdx / td;
+      dy = tdy / td;
+    } else {
+      tapTarget = null;
+      tryPick();
+    }
+  }
+
   gnome.moving = (dx !== 0 || dy !== 0);
   if (gnome.moving) {
     const len = Math.hypot(dx, dy);
@@ -289,6 +340,12 @@ function update(dt) {
     if (!collide(nx, gnome.y)) gnome.x = nx;
     if (!collide(gnome.x, ny)) gnome.y = ny;
     gnome.walkTime += dt;
+  }
+
+  // age tap ripples
+  for (let i = tapRipples.length - 1; i >= 0; i--) {
+    tapRipples[i].age += dt;
+    if (tapRipples[i].age > 0.6) tapRipples.splice(i, 1);
   }
 
   // --- breadcrumb trail for the cats ---
@@ -744,6 +801,20 @@ function drawCat(cat, cam) {
   }
 }
 
+function drawTapRipples(cam) {
+  for (const r of tapRipples) {
+    const sx = r.x - cam.x, sy = r.y - cam.y;
+    const t = r.age / 0.6;
+    const radius = 6 + t * 22;
+    const alpha = (1 - t) * 0.65;
+    ctx.strokeStyle = `rgba(255,245,200,${alpha})`;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(sx, sy, radius, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+}
+
 function drawMotes(cam) {
   const { w, h } = viewSize();
   for (const p of motes) {
@@ -812,7 +883,7 @@ function drawUI() {
     const sx = nearestMushroom.x - cam.x;
     const sy = nearestMushroom.y - cam.y - 38;
     ctx.font = 'bold 13px Georgia, serif';
-    const label = 'Space — pick ' + nearestMushroom.kind.name;
+    const label = 'Tap or Space — pick ' + nearestMushroom.kind.name;
     const tw = ctx.measureText(label).width;
     ctx.fillStyle = 'rgba(30,40,28,0.8)';
     roundRect(sx - tw / 2 - 8, sy - 16, tw + 16, 22, 6);
@@ -843,14 +914,14 @@ function drawUI() {
     ctx.fillText('A quiet walk through the forest, picking mushrooms.', w / 2, h / 2 - 24);
     ctx.fillText('Frankie and Pickle will keep you company.', w / 2, h / 2);
     ctx.font = '15px Georgia, serif';
-    ctx.fillText('WASD / arrows — walk        Space or E — pick        M — forest sounds', w / 2, h / 2 + 44);
+    ctx.fillText('Tap / click to walk & pick        WASD / arrows — walk        Space — pick        M — sound', w / 2, h / 2 + 44);
     ctx.font = 'italic 14px Georgia, serif';
-    ctx.fillText('Press any key to begin', w / 2, h / 2 + 80);
+    ctx.fillText('Tap anywhere or press any key to begin', w / 2, h / 2 + 80);
     ctx.textAlign = 'left';
   } else {
     ctx.fillStyle = 'rgba(243,234,216,0.55)';
     ctx.font = '12px Georgia, serif';
-    ctx.fillText('WASD walk · Space pick · M sound' + (audioOn ? ' (on)' : ''), 16, h - 14);
+    ctx.fillText('Tap/click to walk & pick · WASD walk · Space pick · M sound' + (audioOn ? ' (on)' : ''), 16, h - 14);
   }
 }
 
@@ -903,6 +974,7 @@ function render() {
   drawables.sort((a, b) => a.y - b.y);
   for (const d of drawables) d.draw();
 
+  drawTapRipples(cam);
   drawMotes(cam);
   drawLightShafts(cam);
   drawUI();
