@@ -25,9 +25,14 @@ jobs:
 
       - uses: actions/configure-pages@v5.0.0
 
+      - name: Stage public files
+        run: |
+          mkdir _site
+          cp index.html game.js _site/
+
       - uses: actions/upload-pages-artifact@v3.0.1
         with:
-          path: .
+          path: _site
 
       - id: deployment
         uses: actions/deploy-pages@v4.0.5
